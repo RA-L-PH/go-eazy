@@ -1,0 +1,80 @@
+name: Auto Label PR
+
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply single label based on PR title
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title.toLowerCase();
+
+            // Priority order matters — first match wins, only ONE label gets applied.
+            // Security is checked first since it's highest priority regardless of wording.
+            let label = null;
+
+            if (/security|vulnerab|exploit|bypass|escalation|xss|csrf|cors|injection/.test(title)) {
+              label = "security";
+            } else if (/^fix|bugfix|bug:/.test(title)) {
+              label = "bug";
+            } else if (/^feat|feature/.test(title)) {
+              label = "feature";
+            } else if (/^docs|documentation/.test(title)) {
+              label = "documentation";
+            } else if (/^refactor/.test(title)) {
+              label = "refactor";
+            } else if (/ui|ux|style|responsive|css/.test(title)) {
+              label = "ui/ux";
+            }
+
+            if (!label) {
+              console.log("No matching keyword found in title — skipping, no label applied.");
+              return;
+            }
+
+            // Get labels already on this PR
+            const { data: existingLabels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+            });
+
+            const existingNames = existingLabels.map(l => l.name);
+
+            // Don't add it again if it's already there (avoids duplicate-add errors/noise)
+            if (existingNames.includes(label)) {
+              console.log(`Label "${label}" already present — skipping.`);
+              return;
+            }
+
+            // Remove any OTHER auto-labels this workflow might have added previously
+            // (keeps exactly one type-label at a time if the title gets edited later)
+            const autoLabels = ["security", "bug", "feature", "documentation", "refactor", "ui/ux"];
+            for (const existing of existingNames) {
+              if (autoLabels.includes(existing) && existing !== label) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  name: existing,
+                });
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: [label],
+            });
+
+            console.log(`Applied label: ${label}`);
